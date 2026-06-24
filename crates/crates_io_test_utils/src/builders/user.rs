@@ -50,6 +50,7 @@ impl<'a> UserBuilder<'a> {
             is_admin: false,
             publish_notifications: true,
             username: self.username.into(),
+            current_username_adopted_at: None,
             created_at: None,
         }
     }
