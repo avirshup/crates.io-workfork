@@ -8,8 +8,35 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde::Serialize;
 
 use crate::fns::lower;
-use crate::models::{Crate, CrateOwner, Email, Owner, OwnerKind};
+use crate::models::{Crate, CrateOwner, Email, OwnerKind};
 use crate::schema::{crate_owners, emails, oauth_github, users};
+
+/// Public data for a crates.io user.
+#[derive(Clone, Debug, HasQuery, Serialize)]
+#[diesel(
+    table_name = users,
+    base_query = users::table.left_join(oauth_github::table),
+)]
+pub struct PublicUser {
+    pub id: i32,
+    pub name: Option<String>,
+    pub gh_login: String,
+    #[diesel(select_expression = oauth_github::avatar.nullable())]
+    pub gh_avatar: Option<String>,
+    pub username: String,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+impl PublicUser {
+    pub async fn owning(krate: &Crate, mut conn: &AsyncPgConnection) -> QueryResult<Vec<Self>> {
+        CrateOwner::by_owner_kind(OwnerKind::User)
+            .inner_join(users::table.left_join(oauth_github::table))
+            .select(PublicUser::as_select())
+            .filter(crate_owners::crate_id.eq(krate.id))
+            .load(&mut conn)
+            .await
+    }
+}
 
 /// The model representing a row in the `users` database table.
 #[derive(Clone, Debug, HasQuery, Identifiable, Serialize)]
@@ -24,8 +51,9 @@ pub struct User {
     pub gh_login: String,
     #[diesel(select_expression = oauth_github::avatar.nullable())]
     pub gh_avatar: Option<String>,
+    #[diesel(select_expression = oauth_github::encrypted_token.nullable())]
     #[serde(skip)]
-    pub gh_encrypted_token: Vec<u8>,
+    pub gh_encrypted_token: Option<Vec<u8>>,
     pub account_lock_reason: Option<String>,
     pub account_lock_until: Option<DateTime<Utc>>,
     pub is_admin: bool,
@@ -51,17 +79,13 @@ impl User {
             .await
     }
 
-    pub async fn owning(krate: &Crate, mut conn: &AsyncPgConnection) -> QueryResult<Vec<Owner>> {
-        let users = CrateOwner::by_owner_kind(OwnerKind::User)
+    pub async fn owning(krate: &Crate, mut conn: &AsyncPgConnection) -> QueryResult<Vec<Self>> {
+        CrateOwner::by_owner_kind(OwnerKind::User)
             .inner_join(users::table.left_join(oauth_github::table))
             .select(User::as_select())
             .filter(crate_owners::crate_id.eq(krate.id))
             .load(&mut conn)
-            .await?
-            .into_iter()
-            .map(Owner::User);
-
-        Ok(users.collect())
+            .await
     }
 
     /// Queries the database for the verified emails
@@ -96,7 +120,6 @@ pub struct NewUser<'a> {
     pub gh_login: &'a str,
     pub username: &'a str,
     pub name: Option<&'a str>,
-    pub gh_encrypted_token: &'a [u8],
 }
 
 impl NewUser<'_> {
@@ -110,6 +133,11 @@ impl NewUser<'_> {
     }
 
     /// Inserts the user into the database, or updates an existing one.
+    ///
+    /// This currently works because `users::gh_id` is unique. When we switch to `users::username`
+    /// being the unique key, we should NOT upsert based solely on matching usernames, because we
+    /// might be trying to create a new user who is trying to create their account with a username
+    /// that has already been claimed.
     pub async fn insert_or_update(&self, mut conn: &AsyncPgConnection) -> QueryResult<i32> {
         diesel::insert_into(users::table)
             .values(self)
@@ -127,7 +155,6 @@ impl NewUser<'_> {
                 users::gh_login.eq(excluded(users::gh_login)),
                 users::username.eq(excluded(users::username)),
                 users::name.eq(excluded(users::name)),
-                users::gh_encrypted_token.eq(excluded(users::gh_encrypted_token)),
             ))
             .returning(users::id)
             .get_result(&mut conn)
@@ -150,7 +177,7 @@ pub struct OauthGithub {
     pub account_id: i64,
     /// In the process of being migrated from `users.gh_avatar`.
     pub avatar: Option<String>,
-    /// In the process of being migrated from `users.gh_encrypted_token`.
+    /// The OAuth access token from GitHub for this user, encrypted at rest in our database
     pub encrypted_token: Vec<u8>,
     /// The last time we verified with GitHub what the GitHub username for this user was, and
     /// whether the account was valid.
@@ -171,44 +198,22 @@ pub struct OauthGithub {
     belongs_to(User),
 )]
 pub struct NewOauthGithub<'a> {
-    pub account_id: i64,           // corresponds to users.gh_id
-    pub avatar: Option<&'a str>,   // corresponds to users.gh_avatar
-    pub encrypted_token: &'a [u8], // corresponds to users.gh_encrypted_token
-    pub login: &'a str,            // corresponds to users.gh_login
+    pub account_id: i64,         // corresponds to users.gh_id
+    pub avatar: Option<&'a str>, // corresponds to users.gh_avatar
+    pub encrypted_token: &'a [u8],
+    #[builder(default = Utc::now())]
+    pub last_sync: DateTime<Utc>,
+    pub login: &'a str, // corresponds to users.gh_login
     pub user_id: i32,
 }
 
 impl NewOauthGithub<'_> {
-    /// Inserts the associated GitHub account info into the database, or updates an existing record.
-    ///
-    /// GitHub `account_id` is the primary key of the `oauth_github` table, and comes from GitHub.
-    ///
-    /// Each GitHub account ID can only be associated with one crates.io account, so that we know
-    /// who to log in when we get a GitHub oAuth response.
-    ///
-    /// If this function gets an `account_id` conflict, it does not and should not update the
-    /// `user_id` to that of the currently-logged-in crates.io user's ID because that would mean
-    /// that GitHub account has already been associated with a different crates.io account. In that
-    /// case, the currently-logged-in crates.io user should be logged out and the crates.io user
-    /// already associated with this GitHub user should be logged in.
-    ///
-    /// We may eventually implement the ability to associate multiple GitHub accounts with one
-    /// crates.io account.
-    ///
-    /// This function should be called if there is no current user and should update the encrypted
-    /// token, login, or avatar if those have changed.
-    pub async fn insert_or_update(&self, mut conn: &AsyncPgConnection) -> QueryResult<OauthGithub> {
+    pub async fn insert(&self, mut conn: &AsyncPgConnection) -> QueryResult<()> {
         diesel::insert_into(oauth_github::table)
             .values(self)
-            .on_conflict(oauth_github::account_id)
-            .do_update()
-            .set((
-                oauth_github::encrypted_token.eq(excluded(oauth_github::encrypted_token)),
-                oauth_github::login.eq(excluded(oauth_github::login)),
-                oauth_github::avatar.eq(excluded(oauth_github::avatar)),
-                oauth_github::last_sync.eq(Utc::now()),
-            ))
-            .get_result(&mut conn)
-            .await
+            .execute(&mut conn)
+            .await?;
+
+        Ok(())
     }
 }

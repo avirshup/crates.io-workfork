@@ -7,7 +7,7 @@
 use crate::app::AppState;
 use crate::controllers::krate::CratePath;
 use crate::models::{
-    Category, Crate, CrateCategory, CrateKeyword, Keyword, TopVersions, User, Version,
+    Category, Crate, CrateCategory, CrateKeyword, Keyword, PublicUser, TopVersions, Version,
     VersionOwnerAction,
 };
 use crate::schema::*;
@@ -39,8 +39,9 @@ pub struct FindQueryParams {
     include: Option<String>,
 }
 
+/// Response returned when getting crate metadata.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct GetResponse {
+pub struct CrateGetResponse {
     /// The crate metadata.
     #[serde(rename = "crate")]
     krate: EncodableCrate,
@@ -66,12 +67,16 @@ pub struct GetResponse {
     get,
     path = "/api/v1/crates/new",
     tag = "crates",
-    responses((status = 200, description = "Successful Response", body = inline(GetResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(CrateGetResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn find_new_crate(
     app: AppState,
     params: FindQueryParams,
-) -> AppResult<Json<GetResponse>> {
+) -> AppResult<Json<CrateGetResponse>> {
     let name = "new".to_string();
     find_crate(app, CratePath { name }, params).await
 }
@@ -82,13 +87,17 @@ pub async fn find_new_crate(
     path = "/api/v1/crates/{name}",
     params(CratePath, FindQueryParams),
     tag = "crates",
-    responses((status = 200, description = "Successful Response", body = inline(GetResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(CrateGetResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn find_crate(
     app: AppState,
     path: CratePath,
     params: FindQueryParams,
-) -> AppResult<Json<GetResponse>> {
+) -> AppResult<Json<CrateGetResponse>> {
     let mut conn = app.db_read().await?;
 
     let include = params
@@ -206,7 +215,7 @@ pub async fn find_crate(
             .collect::<Vec<EncodableCategory>>()
     });
 
-    Ok(Json(GetResponse {
+    Ok(Json(CrateGetResponse {
         krate: encodable_crate,
         versions: encodable_versions,
         keywords: encodable_keywords,
@@ -214,7 +223,7 @@ pub async fn find_crate(
     }))
 }
 
-type VersionsAndPublishers = (Version, Option<User>);
+type VersionsAndPublishers = (Version, Option<PublicUser>);
 
 async fn load_versions_and_publishers(
     conn: &AsyncPgConnection,
@@ -308,7 +317,7 @@ async fn _load_versions_and_publishers(
 ) -> AppResult<Option<Vec<VersionsAndPublishers>>> {
     let mut query = Version::belonging_to(krate)
         .left_outer_join(users::table.left_join(oauth_github::table))
-        .select(<(Version, Option<User>)>::as_select())
+        .select(<(Version, Option<PublicUser>)>::as_select())
         .order_by(versions::id.desc())
         .into_boxed();
 

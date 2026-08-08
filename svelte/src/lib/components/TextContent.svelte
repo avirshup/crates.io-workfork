@@ -42,6 +42,7 @@
 
     :global(img) {
       max-width: 100%;
+      object-fit: contain;
     }
 
     :global(pre) {

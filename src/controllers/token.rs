@@ -50,8 +50,9 @@ impl GetParams {
     }
 }
 
+/// Response returned when listing API tokens for the authenticated user.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ListResponse {
+pub struct ApiTokenListResponse {
     pub api_tokens: Vec<ApiToken>,
 }
 
@@ -63,7 +64,11 @@ pub struct ListResponse {
     security(("cookie" = [])),
     tag = "api_tokens",
     extensions(("x-internal" = json!(true))),
-    responses((status = 200, description = "Successful Response", body = inline(ListResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(ApiTokenListResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn list_api_tokens(
     app: AppState,
@@ -118,7 +123,11 @@ pub struct CreateResponse {
     security(("cookie" = [])),
     tag = "api_tokens",
     extensions(("x-internal" = json!(true))),
-    responses((status = 200, description = "Successful Response", body = inline(CreateResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(CreateResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn create_api_token(
     app: AppState,
@@ -231,8 +240,9 @@ pub async fn create_api_token(
     Ok(Json(CreateResponse { api_token }))
 }
 
+/// Response returned when getting an API token by ID.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct GetResponse {
+pub struct ApiTokenGetResponse {
     pub api_token: ApiToken,
 }
 
@@ -248,13 +258,17 @@ pub struct GetResponse {
         ("cookie" = []),
     ),
     tag = "api_tokens",
-    responses((status = 200, description = "Successful Response", body = inline(GetResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(ApiTokenGetResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn find_api_token(
     app: AppState,
     Path(id): Path<i32>,
     req: Parts,
-) -> AppResult<(TypedHeader<CacheControl>, Json<GetResponse>)> {
+) -> AppResult<(TypedHeader<CacheControl>, Json<ApiTokenGetResponse>)> {
     let mut conn = app.db_write().await?;
     let auth = AuthCheck::default().check(&req, &mut conn).await?;
     let user = auth.user();
@@ -264,7 +278,7 @@ pub async fn find_api_token(
         .first(&mut conn)
         .await?;
 
-    Ok((no_store(), Json(GetResponse { api_token })))
+    Ok((no_store(), Json(ApiTokenGetResponse { api_token })))
 }
 
 /// Revoke API token.
@@ -279,7 +293,11 @@ pub async fn find_api_token(
         ("cookie" = []),
     ),
     tag = "api_tokens",
-    responses((status = 200, description = "Successful Response", body = Object)),
+    responses(
+        (status = 200, description = "Successful Response", body = Object),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn revoke_api_token(
     app: AppState,
@@ -306,7 +324,11 @@ pub async fn revoke_api_token(
     path = "/api/v1/tokens/current",
     security(("api_token" = [])),
     tag = "api_tokens",
-    responses((status = 204, description = "Successful Response")),
+    responses(
+        (status = 204, description = "Successful Response"),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn revoke_current_api_token(app: AppState, req: Parts) -> AppResult<Response> {
     let mut conn = app.db_write().await?;

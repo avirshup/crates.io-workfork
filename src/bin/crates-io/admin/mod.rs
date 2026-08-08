@@ -1,0 +1,70 @@
+mod analyze_crates;
+mod build_crate_zips;
+mod default_versions;
+mod delete_crate;
+mod delete_version;
+mod dialoguer;
+mod enqueue_job;
+mod migrate;
+mod populate;
+mod render_og_images;
+mod render_readmes;
+mod reverse_dependencies;
+mod sync_index;
+mod test_email;
+mod upload_index;
+mod verify_token;
+mod yank_version;
+
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    AnalyzeCrates(analyze_crates::Options),
+    BuildCrateZips(build_crate_zips::Options),
+    RenderOgImages(render_og_images::Opts),
+    DeleteCrate(delete_crate::Opts),
+    DeleteVersion(delete_version::Opts),
+    Populate(populate::Opts),
+    RenderReadmes(render_readmes::Opts),
+    SyncIndex(sync_index::Opts),
+    TestEmail(test_email::Opts),
+    VerifyToken(verify_token::Opts),
+    Migrate(migrate::Opts),
+    UploadIndex(upload_index::Opts),
+    YankVersion(yank_version::Opts),
+    #[clap(subcommand)]
+    EnqueueJob(enqueue_job::Command),
+    #[clap(subcommand)]
+    DefaultVersions(default_versions::Command),
+    #[clap(subcommand)]
+    ReverseDependencies(reverse_dependencies::Command),
+}
+
+#[tokio::main]
+pub async fn run(command: Command) -> anyhow::Result<()> {
+    let _sentry = crates_io::sentry::init();
+
+    // Initialize logging
+    crates_io::util::tracing::init();
+
+    let span = info_span!("admin.command", command = tracing::field::Empty);
+    span.record("command", tracing::field::debug(&command));
+
+    match command {
+        Command::AnalyzeCrates(opts) => analyze_crates::run(opts).await,
+        Command::BuildCrateZips(opts) => build_crate_zips::run(opts).await,
+        Command::RenderOgImages(opts) => render_og_images::run(opts).await,
+        Command::DeleteCrate(opts) => delete_crate::run(opts).await,
+        Command::DeleteVersion(opts) => delete_version::run(opts).await,
+        Command::Populate(opts) => populate::run(opts).await,
+        Command::RenderReadmes(opts) => render_readmes::run(opts).await,
+        Command::SyncIndex(opts) => sync_index::run(opts).await,
+        Command::TestEmail(opts) => test_email::run(opts).await,
+        Command::VerifyToken(opts) => verify_token::run(opts).await,
+        Command::Migrate(opts) => migrate::run(opts).await,
+        Command::UploadIndex(opts) => upload_index::run(opts).await,
+        Command::YankVersion(opts) => yank_version::run(opts).await,
+        Command::EnqueueJob(command) => enqueue_job::run(command).await,
+        Command::DefaultVersions(command) => default_versions::run(command).await,
+        Command::ReverseDependencies(command) => reverse_dependencies::run(command).await,
+    }
+}

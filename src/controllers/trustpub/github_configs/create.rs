@@ -28,7 +28,11 @@ const MAX_CONFIGS_PER_CRATE: usize = 5;
     security(("cookie" = []), ("api_token" = [])),
     request_body = inline(json::CreateRequest),
     tag = "trusted_publishing",
-    responses((status = 200, description = "Successful Response", body = inline(json::CreateResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(json::CreateResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn create_trustpub_github_config(
     state: AppState,
@@ -89,8 +93,12 @@ pub async fn create_trustpub_github_config(
 
     let owner = &json_config.repository_owner;
 
-    let encryption = &state.config.gh_token_encryption;
-    let gh_auth = &auth_user.gh_encrypted_token;
+    let encryption = &state.config.token_encryption;
+    let Some(gh_auth) = auth_user.gh_encrypted_token.as_ref() else {
+        return Err(bad_request(
+            "Must have a linked GitHub account to create a Trusted Publishing config",
+        ));
+    };
     let gh_auth = encryption.decrypt(gh_auth).map_err(|err| {
         let login = &auth_user.gh_login;
         warn!("Failed to decrypt GitHub token for user {login}: {err}");

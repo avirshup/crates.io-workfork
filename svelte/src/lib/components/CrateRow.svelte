@@ -161,14 +161,8 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-
-    & > :global(*) {
-      margin-bottom: calc(var(--space-xs) / 2);
-    }
-
-    & > :global(:not(:last-child)) {
-      margin-right: var(--space-2xs);
-    }
+    gap: calc(var(--space-xs) / 2) var(--space-2xs);
+    padding-bottom: calc(var(--space-xs) / 2);
   }
 
   .description {
@@ -183,7 +177,7 @@
     padding: 0;
     margin: 0;
 
-    > :global(* + *) {
+    > li + li {
       margin-top: var(--space-xs);
     }
   }
@@ -216,7 +210,7 @@
     margin: var(--space-xs) 0 0 0;
     padding: 0;
 
-    > :global(* + *) {
+    > li + li {
       margin-left: var(--space-xs);
     }
   }

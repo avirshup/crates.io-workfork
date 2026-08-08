@@ -5,6 +5,32 @@ expression: response.json()
 {
   "components": {
     "schemas": {
+      "ApiErrorResponse": {
+        "description": "The JSON envelope returned for API errors.",
+        "properties": {
+          "errors": {
+            "description": "The errors that prevented the request from succeeding.",
+            "items": {
+              "description": "A human-readable API error.",
+              "properties": {
+                "detail": {
+                  "description": "A description of the error.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors"
+        ],
+        "type": "object"
+      },
       "ApiToken": {
         "description": "The model representing a row in the `api_tokens` database table.",
         "properties": {
@@ -884,6 +910,17 @@ expression: response.json()
         ],
         "type": "object"
       },
+      "ReleaseTrackDetails": {
+        "properties": {
+          "highest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "highest"
+        ],
+        "type": "object"
+      },
       "Slug": {
         "properties": {
           "description": {
@@ -952,6 +989,69 @@ expression: response.json()
           "login"
         ],
         "type": "object"
+      },
+      "TrustpubData": {
+        "description": "Data structure containing trusted publisher information extracted from JWT claims",
+        "oneOf": [
+          {
+            "properties": {
+              "provider": {
+                "enum": [
+                  "github"
+                ],
+                "type": "string"
+              },
+              "repository": {
+                "description": "Repository (e.g. \"octo-org/octo-repo\")",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Workflow run ID",
+                "type": "string"
+              },
+              "sha": {
+                "description": "SHA of the commit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "repository",
+              "run_id",
+              "sha",
+              "provider"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "job_id": {
+                "description": "Job ID",
+                "type": "string"
+              },
+              "project_path": {
+                "description": "Project path (e.g. \"rust-lang/cargo\")",
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "gitlab"
+                ],
+                "type": "string"
+              },
+              "sha": {
+                "description": "SHA of the commit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_path",
+              "job_id",
+              "sha",
+              "provider"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "User": {
         "properties": {
@@ -1209,14 +1309,14 @@ expression: response.json()
             ]
           },
           "trustpub_data": {
-            "additionalProperties": {},
-            "description": "Information about the trusted publisher that published this version, if any.\n\nStatus: **Unstable**\n\nThis field is filled if the version was published via trusted publishing\n(e.g., GitHub Actions) rather than a regular API token.\n\nThe exact structure of this field depends on the `provider` field\ninside it.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrustpubData",
+                "description": "Information about the trusted publisher that published this version, if any.\n\nStatus: **Unstable**\n\nThis field is filled if the version was published via trusted publishing\n(e.g., GitHub Actions) rather than a regular API token.\n\nThe exact structure of this field depends on the `provider` field\ninside it."
+              }
             ]
           },
           "updated_at": {
@@ -1308,6 +1408,23 @@ expression: response.json()
           "version_downloads",
           "authors"
         ],
+        "type": "object"
+      },
+      "VersionUpdate": {
+        "properties": {
+          "yank_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "yanked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       }
     },
@@ -1446,6 +1563,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -1464,7 +1601,43 @@ expression: response.json()
         "operationId": "end_session",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "example": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -1557,6 +1730,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Complete authentication flow.",
@@ -1593,6 +1786,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Begin authentication flow.",
@@ -1651,6 +1864,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing categories.",
                   "properties": {
                     "categories": {
                       "description": "The list of categories.",
@@ -1660,6 +1874,7 @@ expression: response.json()
                       "type": "array"
                     },
                     "meta": {
+                      "description": "Pagination metadata for a category list response.",
                       "properties": {
                         "total": {
                           "description": "The total number of categories.",
@@ -1683,6 +1898,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "List all categories.",
@@ -1710,6 +1945,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting category metadata.",
                   "properties": {
                     "category": {
                       "$ref": "#/components/schemas/Category"
@@ -1723,6 +1959,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get category metadata.",
@@ -1756,6 +2012,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "List all available category slugs.",
@@ -1797,6 +2073,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Marks the email belonging to the given token as verified.",
@@ -1959,6 +2255,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing crates.",
                   "properties": {
                     "crates": {
                       "items": {
@@ -1967,6 +2264,7 @@ expression: response.json()
                       "type": "array"
                     },
                     "meta": {
+                      "description": "Pagination metadata for a crate list response.",
                       "properties": {
                         "next_page": {
                           "description": "Query string to the next page of results, if any.",
@@ -2006,6 +2304,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2032,6 +2350,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting crate metadata.",
                   "properties": {
                     "categories": {
                       "description": "The categories of the crate.",
@@ -2079,6 +2398,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Gets crate metadata (for the `new` crate).",
@@ -2111,6 +2450,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2156,6 +2515,26 @@ expression: response.json()
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2195,6 +2574,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting crate metadata.",
                   "properties": {
                     "categories": {
                       "description": "The categories of the crate.",
@@ -2242,6 +2622,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Gets crate metadata.",
@@ -2313,6 +2713,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2417,6 +2837,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get the download counts for a crate.",
@@ -2458,6 +2898,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2505,6 +2965,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2554,6 +3034,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2602,6 +3102,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Lists team owners of a crate.",
@@ -2645,6 +3165,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Lists user owners of a crate.",
@@ -2718,6 +3258,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2767,6 +3327,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Lists crate owners.",
@@ -2838,6 +3418,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -2943,6 +3543,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Lists reverse dependencies of a crate.",
@@ -3032,6 +3652,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing versions of a crate.",
                   "properties": {
                     "meta": {
                       "properties": {
@@ -3044,7 +3665,13 @@ expression: response.json()
                           ]
                         },
                         "release_tracks": {
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/ReleaseTrackDetails"
+                          },
                           "description": "Additional data about the crate's release tracks,\nif `?include=release_tracks` is used.",
+                          "propertyNames": {
+                            "type": "string"
+                          },
                           "type": [
                             "object",
                             "null"
@@ -3078,6 +3705,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "List all versions of a crate.",
@@ -3115,6 +3762,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting crate version metadata.",
                   "properties": {
                     "version": {
                       "$ref": "#/components/schemas/Version"
@@ -3128,6 +3776,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get crate version metadata.",
@@ -3159,6 +3827,24 @@ expression: response.json()
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "version": {
+                    "$ref": "#/components/schemas/VersionUpdate"
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -3177,6 +3863,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -3222,6 +3928,26 @@ expression: response.json()
         "responses": {
           "200": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get crate version authors.",
@@ -3276,6 +4002,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get crate version dependencies.",
@@ -3340,6 +4086,26 @@ expression: response.json()
                 }
               }
             }
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Download a crate version.",
@@ -3405,6 +4171,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get the download counts for a crate version.",
@@ -3468,6 +4254,26 @@ expression: response.json()
                 }
               }
             }
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get the readme of a crate version.",
@@ -3503,6 +4309,26 @@ expression: response.json()
         "responses": {
           "201": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -3559,6 +4385,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -3619,6 +4465,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -3685,6 +4551,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing keywords.",
                   "properties": {
                     "keywords": {
                       "description": "The list of keywords.",
@@ -3694,6 +4561,7 @@ expression: response.json()
                       "type": "array"
                     },
                     "meta": {
+                      "description": "Pagination metadata for a keyword list response.",
                       "properties": {
                         "total": {
                           "description": "The total number of keywords.",
@@ -3717,6 +4585,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "List all keywords.",
@@ -3744,6 +4632,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting keyword metadata.",
                   "properties": {
                     "keyword": {
                       "$ref": "#/components/schemas/Keyword"
@@ -3757,6 +4646,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get keyword metadata.",
@@ -3817,6 +4726,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -3863,6 +4792,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -3925,6 +4874,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Accept a crate owner invitation with a token.",
@@ -4018,6 +4987,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4058,6 +5047,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4094,6 +5103,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing API tokens for the authenticated user.",
                   "properties": {
                     "api_tokens": {
                       "items": {
@@ -4110,6 +5120,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4195,6 +5225,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4233,6 +5283,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4267,6 +5337,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting an API token by ID.",
                   "properties": {
                     "api_token": {
                       "$ref": "#/components/schemas/ApiToken"
@@ -4280,6 +5351,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4334,6 +5425,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4395,6 +5506,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get crates.io metadata.",
@@ -4483,6 +5614,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get front page data.",
@@ -4511,6 +5662,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting a team by login.",
                   "properties": {
                     "team": {
                       "$ref": "#/components/schemas/Team"
@@ -4524,6 +5676,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Find team by login.",
@@ -4539,6 +5711,26 @@ expression: response.json()
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4612,6 +5804,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing GitHub trusted publishing configurations.",
                   "properties": {
                     "github_configs": {
                       "items": {
@@ -4620,6 +5813,7 @@ expression: response.json()
                       "type": "array"
                     },
                     "meta": {
+                      "description": "Pagination metadata for a GitHub configuration list response.",
                       "properties": {
                         "next_page": {
                           "description": "Query string to the next page of results, if any.",
@@ -4651,6 +5845,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4735,6 +5949,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4769,6 +6003,26 @@ expression: response.json()
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4845,6 +6099,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when listing GitLab trusted publishing configurations.",
                   "properties": {
                     "gitlab_configs": {
                       "items": {
@@ -4853,6 +6108,7 @@ expression: response.json()
                       "type": "array"
                     },
                     "meta": {
+                      "description": "Pagination metadata for a GitLab configuration list response.",
                       "properties": {
                         "next_page": {
                           "description": "Query string to the next page of results, if any.",
@@ -4884,6 +6140,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -4968,6 +6244,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -5001,6 +6297,26 @@ expression: response.json()
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -5024,6 +6340,26 @@ expression: response.json()
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -5074,6 +6410,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Exchange an OIDC token for a temporary access token.",
@@ -5116,6 +6472,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [
@@ -5170,6 +6546,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Get user stats.",
@@ -5183,7 +6579,7 @@ expression: response.json()
         "operationId": "find_user",
         "parameters": [
           {
-            "description": "Login name of the user",
+            "description": "crates.io username",
             "in": "path",
             "name": "user",
             "required": true,
@@ -5197,6 +6593,7 @@ expression: response.json()
             "content": {
               "application/json": {
                 "schema": {
+                  "description": "Response returned when getting a user by login.",
                   "properties": {
                     "user": {
                       "$ref": "#/components/schemas/User"
@@ -5210,6 +6607,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "summary": "Find user by login.",
@@ -5250,6 +6667,12 @@ expression: response.json()
                           "boolean",
                           "null"
                         ]
+                      },
+                      "username": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "type": "object"
@@ -5283,6 +6706,26 @@ expression: response.json()
               }
             },
             "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
           }
         },
         "security": [

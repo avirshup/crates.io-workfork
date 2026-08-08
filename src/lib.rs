@@ -22,6 +22,7 @@ pub mod certs;
 pub mod cloudfront;
 pub mod config;
 pub mod controllers;
+pub mod datadog;
 pub mod db;
 pub mod email;
 pub mod headers;
@@ -56,7 +57,7 @@ pub enum Env {
 
 /// Configures routes, sessions, logging, and other middleware.
 ///
-/// Called from *src/bin/server.rs*.
+/// Called from *src/bin/crates-io/server.rs*.
 pub fn build_handler(app: Arc<App>) -> axum::Router {
     let state = AppState(app);
 

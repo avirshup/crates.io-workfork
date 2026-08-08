@@ -1,7 +1,6 @@
 use url::Url;
 
 use crate::Env;
-use crate::util::gh_token_encryption::GitHubTokenEncryption;
 
 use super::base::Base;
 use super::database_pools::DatabasePools;
@@ -10,6 +9,7 @@ use crate::config::bind::BindConfig;
 use crate::config::block::BlockConfig;
 use crate::config::cdn_log_storage::CdnLogStorageConfig;
 use crate::config::datadog::DatadogConfig;
+use crate::config::fastly::FastlyConfig;
 use crate::config::features::FeaturesConfig;
 use crate::config::frontend::FrontendConfig;
 use crate::config::github::GitHubOAuthConfig;
@@ -18,6 +18,7 @@ use crate::config::publish_limits::PublishLimitsConfig;
 use crate::config::rate_limits::RateLimitsConfig;
 use crate::middleware::cargo_compat::StatusCodeConfig;
 use crate::storage::StorageConfig;
+use crates_io_encryption::TokenEncryption;
 use crates_io_env_vars::{list, required_var, var, var_parsed};
 use http::HeaderValue;
 use std::convert::Infallible;
@@ -34,7 +35,7 @@ pub struct Server {
     pub cdn_log_queue: CdnLogQueueConfig,
     pub session_key: cookie::Key,
     pub github_oauth: GitHubOAuthConfig,
-    pub gh_token_encryption: GitHubTokenEncryption,
+    pub token_encryption: TokenEncryption,
     pub publish_limits: PublishLimitsConfig,
     pub rate_limits: RateLimitsConfig,
     pub block: BlockConfig,
@@ -65,6 +66,14 @@ pub struct Server {
     pub banner_message: Option<String>,
 
     pub features: FeaturesConfig,
+    pub fastly: Option<FastlyConfig>,
+
+    /// Whether to enqueue `SyncToGitIndex` jobs to update the
+    /// git-based crate index.
+    ///
+    /// Disabled by default in test environments to avoid unnecessary
+    /// git operations.
+    pub sync_git_index: bool,
 
     /// URL of a git repository to mirror the crate index's snapshot branches
     /// to. When set, the `ArchiveIndexBranch` background job pushes snapshot
@@ -88,7 +97,7 @@ impl Server {
     /// Pulls values from the following environment variables:
     ///
     /// - `SESSION_KEY`: The key used to sign and encrypt session cookies.
-    /// - `GITHUB_TOKEN_ENCRYPTION_KEY`: Key for encrypting GitHub access tokens (64 hex characters).
+    /// - `TOKEN_ENCRYPTION_KEY`: Key for encrypting Oauth tokens (64 hex characters).
     /// - `WEB_MAX_ALLOWED_PAGE_OFFSET`: Page offsets larger than this value are rejected. Defaults
     ///   to 200.
     /// - `DISABLE_TOKEN_CREATION`: If set to any non-empty value, disables API token creation
@@ -111,7 +120,10 @@ impl Server {
 
         let max_blocking_threads = var_parsed("SERVER_THREADS")?;
 
-        let storage = StorageConfig::from_environment();
+        let features = FeaturesConfig::from_env()?;
+
+        let mut storage = StorageConfig::from_environment();
+        storage.cache_tags_enabled = features.cache_tags_enabled;
 
         let domain_name = dotenvy::var("DOMAIN_NAME").unwrap_or_else(|_| "crates.io".into());
         let trustpub_audience = var("TRUSTPUB_AUDIENCE")?.unwrap_or_else(|| domain_name.clone());
@@ -128,8 +140,8 @@ impl Server {
             max_blocking_threads,
             session_key: cookie::Key::derive_from(required_var("SESSION_KEY")?.as_bytes()),
             github_oauth: GitHubOAuthConfig::from_env()?,
-            gh_token_encryption: GitHubTokenEncryption::from_environment()?,
-            publish_limits: PublishLimitsConfig::default(),
+            token_encryption: TokenEncryption::from_environment()?,
+            publish_limits: PublishLimitsConfig::from_env()?,
             rate_limits: RateLimitsConfig::from_env()?,
             block: BlockConfig::from_env()?,
             max_allowed_page_offset: var_parsed("WEB_MAX_ALLOWED_PAGE_OFFSET")?.unwrap_or(200),
@@ -147,7 +159,9 @@ impl Server {
             trustpub_audience,
             disable_token_creation,
             banner_message,
-            features: FeaturesConfig::from_env()?,
+            features,
+            fastly: FastlyConfig::from_env()?,
+            sync_git_index: true,
             index_archive_url: var_parsed("GIT_ARCHIVE_REPO_URL")?,
             postgres_bin_dir: var_parsed("POSTGRES_BIN_DIR")?,
         })

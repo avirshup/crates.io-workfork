@@ -5,13 +5,13 @@ use crate::controllers::helpers::pagination::{
     Page, PaginationOptions, PaginationQueryParams, encode_seek,
 };
 use crate::controllers::krate::CratePath;
-use crate::models::{User, Version, VersionOwnerAction};
+use crate::models::{PublicUser, Version, VersionOwnerAction};
 use crate::schema::{oauth_github, users, versions};
 use crate::util::RequestUtils;
 use crate::util::errors::{AppResult, BoxedAppError, bad_request};
 use crate::util::string_excl_null::StringExclNull;
 use crate::views::EncodableVersion;
-use crate::views::release_tracks::ReleaseTracks;
+use crate::views::release_tracks::{ReleaseTrackDetails, ReleaseTracks};
 use axum::Json;
 use axum::extract::FromRequestParts;
 use axum_extra::extract::Query;
@@ -25,10 +25,11 @@ use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Query parameters for listing versions of a crate.
 #[derive(Debug, Deserialize, FromRequestParts, utoipa::IntoParams)]
 #[from_request(via(Query))]
 #[into_params(parameter_in = Query)]
-pub struct ListQueryParams {
+pub struct VersionListQueryParams {
     /// Additional data to include in the response.
     ///
     /// Valid values: `release_tracks`.
@@ -51,7 +52,7 @@ pub struct ListQueryParams {
     nums: Vec<StringExclNull>,
 }
 
-impl ListQueryParams {
+impl VersionListQueryParams {
     fn include(&self) -> AppResult<ShowIncludeMode> {
         let include = self
             .include
@@ -63,8 +64,9 @@ impl ListQueryParams {
     }
 }
 
+/// Response returned when listing versions of a crate.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ListResponse {
+pub struct VersionListResponse {
     versions: Vec<EncodableVersion>,
 
     #[schema(inline)]
@@ -75,17 +77,21 @@ pub struct ListResponse {
 #[utoipa::path(
     get,
     path = "/api/v1/crates/{name}/versions",
-    params(CratePath, ListQueryParams, PaginationQueryParams),
+    params(CratePath, VersionListQueryParams, PaginationQueryParams),
     tag = "versions",
-    responses((status = 200, description = "Successful Response", body = inline(ListResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(VersionListResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn list_versions(
     state: AppState,
     path: CratePath,
-    params: ListQueryParams,
+    params: VersionListQueryParams,
     pagination: PaginationQueryParams,
     req: Parts,
-) -> AppResult<Json<ListResponse>> {
+) -> AppResult<Json<VersionListResponse>> {
     let conn = state.db_read().await?;
 
     let crate_id = path.load_crate_id(&conn).await?;
@@ -116,7 +122,7 @@ pub async fn list_versions(
         .map(|((v, pb), aas)| EncodableVersion::from(v, &path.name, pb, aas))
         .collect::<Vec<_>>();
 
-    Ok(Json(ListResponse {
+    Ok(Json(VersionListResponse {
         versions,
         meta: versions_and_publishers.meta,
     }))
@@ -130,7 +136,7 @@ pub async fn list_versions(
 async fn list(
     crate_id: i32,
     options: Option<&PaginationOptions>,
-    params: &ListQueryParams,
+    params: &VersionListQueryParams,
     req: &Parts,
     mut conn: &AsyncPgConnection,
 ) -> AppResult<PaginatedVersionsAndPublishers> {
@@ -145,7 +151,7 @@ async fn list(
         let mut query = versions::table
             .filter(versions::crate_id.eq(crate_id))
             .left_outer_join(users::table.left_join(oauth_github::table))
-            .select(<(Version, Option<User>)>::as_select())
+            .select(<(Version, Option<PublicUser>)>::as_select())
             .into_boxed();
 
         if !params.nums.is_empty() {
@@ -192,7 +198,7 @@ async fn list(
         query = query.order((versions::semver_ord_v2.desc(), versions::id.desc()));
     }
 
-    let data: Vec<(Version, Option<User>)> = query.load(&mut conn).await?;
+    let data: Vec<(Version, Option<PublicUser>)> = query.load(&mut conn).await?;
     let mut next_page = None;
     if let Some(options) = options {
         next_page = next_seek_params(&data, options, |last| seek.to_payload(last))?
@@ -257,7 +263,7 @@ async fn list(
 
 mod seek {
     use crate::controllers::helpers::pagination::seek;
-    use crate::models::{User, Version};
+    use crate::models::{PublicUser, Version};
     use chrono::Utc;
     use chrono::serde::ts_microseconds;
 
@@ -279,7 +285,7 @@ mod seek {
     );
 
     impl Seek {
-        pub(crate) fn to_payload(&self, record: &(Version, Option<User>)) -> SeekPayload {
+        pub(crate) fn to_payload(&self, record: &(Version, Option<PublicUser>)) -> SeekPayload {
             let (Version { id, created_at, .. }, _) = *record;
             match *self {
                 Seek::Semver => SeekPayload::Semver(Semver {
@@ -317,7 +323,7 @@ where
 }
 
 struct PaginatedVersionsAndPublishers {
-    data: Vec<(Version, Option<User>)>,
+    data: Vec<(Version, Option<PublicUser>)>,
     meta: ResponseMeta,
 }
 
@@ -334,7 +340,7 @@ struct ResponseMeta {
     /// Additional data about the crate's release tracks,
     /// if `?include=release_tracks` is used.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<std::collections::HashMap<String, ReleaseTrackDetails>>)]
     release_tracks: Option<ReleaseTracks>,
 }
 

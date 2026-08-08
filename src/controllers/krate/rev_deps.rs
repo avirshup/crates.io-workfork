@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::controllers::helpers::pagination::{PaginationOptions, PaginationQueryParams};
 use crate::controllers::krate::CratePath;
-use crate::models::{CrateName, ReverseDependency, User, Version, VersionOwnerAction};
+use crate::models::{CrateName, PublicUser, ReverseDependency, Version, VersionOwnerAction};
 use crate::util::errors::AppResult;
 use crate::views::{EncodableDependency, EncodableVersion};
 use axum::Json;
@@ -35,7 +35,11 @@ pub struct RevDepsMeta {
     path = "/api/v1/crates/{name}/reverse_dependencies",
     params(CratePath, PaginationQueryParams),
     tag = "crates",
-    responses((status = 200, description = "Successful Response", body = inline(RevDepsResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(RevDepsResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn list_reverse_dependencies(
     app: AppState,
@@ -64,11 +68,12 @@ pub async fn list_reverse_dependencies(
 
     let version_ids: Vec<i32> = rev_deps.iter().map(|dep| dep.version_id).collect();
 
-    let versions_and_publishers: Vec<(Version, CrateName, Option<User>)> = versions::table
+    let versions_and_publishers: Vec<(Version, CrateName, Option<PublicUser>)> = versions::table
         .filter(versions::id.eq_any(version_ids))
         .inner_join(crates::table)
         .left_outer_join(users::table.left_join(oauth_github::table))
-        .select(<(Version, CrateName, Option<User>)>::as_select())
+        .select(<(Version, CrateName, Option<PublicUser>)>::as_select())
+        .order(versions::id)
         .load(&mut conn)
         .await?;
 

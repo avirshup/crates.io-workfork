@@ -1,3 +1,4 @@
+pub use self::abandoned_username::{AbandonedUsername, NewAbandonedUsername};
 pub use self::action::{NewVersionOwnerAction, VersionAction, VersionOwnerAction};
 pub use self::category::{Category, CrateCategory, NewCategory};
 pub use self::cloudfront_invalidation_queue::{
@@ -18,11 +19,12 @@ pub use self::owner::{CrateOwner, Owner, OwnerKind};
 pub use self::team::{NewTeam, Team};
 pub use self::token::ApiToken;
 pub use self::trustpub::TrustpubData;
-pub use self::user::{NewOauthGithub, NewUser, OauthGithub, User};
+pub use self::user::{NewOauthGithub, NewUser, OauthGithub, PublicUser, User};
 pub use self::version::{NewVersion, TopVersions, Version};
 
 pub mod helpers;
 
+mod abandoned_username;
 mod action;
 pub mod category;
 mod cloudfront_invalidation_queue;

@@ -3,18 +3,18 @@
 use crate::controllers::helpers::authorization::Rights;
 use crate::controllers::krate::CratePath;
 use crate::models::krate::OwnerRemoveError;
-use crate::models::{Crate, Owner, Team, User};
+use crate::models::{Crate, Owner, PublicUser, Team, User};
 use crate::models::{
     CrateOwner, NewCrateOwnerInvitation, NewCrateOwnerInvitationOutcome, NewTeam,
     krate::NewOwnerInvite, token::EndpointScope,
 };
 use crate::util::errors::{AppResult, BoxedAppError, bad_request, crate_not_found, custom};
-use crate::util::gh_token_encryption::GitHubTokenEncryption;
 use crate::views::EncodableOwner;
 use crate::{App, app::AppState};
 use crate::{auth::AuthCheck, email::EmailMessage};
 use axum::Json;
 use chrono::Utc;
+use crates_io_encryption::TokenEncryption;
 use crates_io_github::{GitHubAuth, GitHubClient, GitHubError};
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -37,19 +37,29 @@ pub struct UsersResponse {
     path = "/api/v1/crates/{name}/owners",
     params(CratePath),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(UsersResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(UsersResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn list_owners(state: AppState, path: CratePath) -> AppResult<Json<UsersResponse>> {
     let conn = state.db_read().await?;
 
     let krate = path.load_crate(&conn).await?;
 
-    let users = krate
-        .owners(&conn)
-        .await?
+    let (mut users, mut teams) = tokio::try_join!(
+        PublicUser::owning(&krate, &conn),
+        Team::owning(&krate, &conn),
+    )?;
+    users.sort_by_key(|user| user.id);
+    teams.sort_by_key(|team| team.id);
+
+    let users = users
         .into_iter()
-        .map(Owner::into)
-        .collect::<Vec<EncodableOwner>>();
+        .map(EncodableOwner::from_user)
+        .chain(teams.into_iter().map(EncodableOwner::from_team))
+        .collect::<Vec<_>>();
 
     Ok(Json(UsersResponse { users }))
 }
@@ -65,17 +75,23 @@ pub struct TeamsResponse {
     path = "/api/v1/crates/{name}/owner_team",
     params(CratePath),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(TeamsResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(TeamsResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn get_team_owners(state: AppState, path: CratePath) -> AppResult<Json<TeamsResponse>> {
     let conn = state.db_read().await?;
     let krate = path.load_crate(&conn).await?;
 
-    let teams = Team::owning(&krate, &conn)
-        .await?
+    let mut teams = Team::owning(&krate, &conn).await?;
+    teams.sort_by_key(|team| team.id);
+
+    let teams = teams
         .into_iter()
-        .map(Owner::into)
-        .collect::<Vec<EncodableOwner>>();
+        .map(EncodableOwner::from_team)
+        .collect::<Vec<_>>();
 
     Ok(Json(TeamsResponse { teams }))
 }
@@ -86,18 +102,24 @@ pub async fn get_team_owners(state: AppState, path: CratePath) -> AppResult<Json
     path = "/api/v1/crates/{name}/owner_user",
     params(CratePath),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(UsersResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(UsersResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn get_user_owners(state: AppState, path: CratePath) -> AppResult<Json<UsersResponse>> {
     let conn = state.db_read().await?;
 
     let krate = path.load_crate(&conn).await?;
 
-    let users = User::owning(&krate, &conn)
-        .await?
+    let mut users = PublicUser::owning(&krate, &conn).await?;
+    users.sort_by_key(|user| user.id);
+
+    let users = users
         .into_iter()
-        .map(Owner::into)
-        .collect::<Vec<EncodableOwner>>();
+        .map(EncodableOwner::from_user)
+        .collect::<Vec<_>>();
 
     Ok(Json(UsersResponse { users }))
 }
@@ -123,7 +145,11 @@ pub struct ModifyResponse {
         ("cookie" = []),
     ),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(ModifyResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(ModifyResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn add_owners(
     app: AppState,
@@ -145,7 +171,11 @@ pub async fn add_owners(
         ("cookie" = []),
     ),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(ModifyResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(ModifyResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn remove_owners(
     app: AppState,
@@ -203,7 +233,7 @@ async fn modify_owners(
 
             let owners = krate.owners(conn).await?;
 
-            match Rights::get(user, &*app.github, &owners, &app.config.gh_token_encryption).await? {
+            match Rights::get(user, &*app.github, &owners, &app.config.token_encryption).await? {
                 Rights::Full => {}
                 // Yes!
                 Rights::Publish => {
@@ -324,7 +354,7 @@ async fn add_owner(
     login: &str,
 ) -> Result<NewOwnerInvite, OwnerAddError> {
     if login.contains(':') {
-        let encryption = &app.config.gh_token_encryption;
+        let encryption = &app.config.token_encryption;
         add_team_owner(&*app.github, conn, req_user, krate, login, encryption).await
     } else {
         invite_user_owner(app, conn, req_user, krate, login).await
@@ -368,7 +398,7 @@ async fn add_team_owner(
     req_user: &User,
     krate: &Crate,
     login: &str,
-    encryption: &GitHubTokenEncryption,
+    encryption: &TokenEncryption,
 ) -> Result<NewOwnerInvite, OwnerAddError> {
     // github:rust-lang:owners
     let mut chunks = login.split(':');
@@ -421,7 +451,7 @@ pub async fn create_or_update_github_team(
     org_name: &str,
     team_name: &str,
     req_user: &User,
-    encryption: &GitHubTokenEncryption,
+    encryption: &TokenEncryption,
 ) -> AppResult<Team> {
     // GET orgs/:org/teams
     // check that `team` is the `slug` in results, and grab its data
@@ -438,14 +468,18 @@ pub async fn create_or_update_github_team(
         )));
     }
 
-    let token = encryption
-        .decrypt(&req_user.gh_encrypted_token)
-        .map_err(|err| {
-            custom(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to decrypt GitHub token: {err}"),
-            )
-        })?;
+    let Some(token) = req_user.gh_encrypted_token.as_ref() else {
+        return Err(bad_request(
+            "Cannot add a GitHub team as an owner without a connected GitHub account",
+        ));
+    };
+
+    let token = encryption.decrypt(token).map_err(|err| {
+        custom(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to decrypt GitHub token: {err}"),
+        )
+    })?;
 
     let auth = GitHubAuth::bearer(token);
     let team = gh_client.team_by_name(org_name, team_name, &auth).await

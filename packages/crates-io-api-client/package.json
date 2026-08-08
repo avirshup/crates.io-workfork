@@ -15,15 +15,15 @@
   "main": "index.ts",
   "scripts": {
     "regenerate": "vitest schema.test.ts --run --update",
-    "test": "vitest"
+    "test": "vitest",
+    "typecheck": "tsc"
   },
   "dependencies": {
     "openapi-fetch": "0.17.0"
   },
   "devDependencies": {
-    "@crates-io/msw": "workspace:*",
-    "msw": "2.14.6",
+    "msw": "2.15.0",
     "openapi-typescript": "7.13.0",
-    "vitest": "4.1.9"
+    "vitest": "4.1.10"
   }
 }

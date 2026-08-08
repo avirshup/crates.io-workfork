@@ -1,0 +1,71 @@
+use super::dialoguer;
+use anyhow::{Context, anyhow};
+use crates_io::storage::Storage;
+use crates_io::tasks::spawn_blocking;
+use crates_io_index::{Repository, RepositoryConfig};
+use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
+
+#[derive(clap::Parser, Debug)]
+#[command(
+    name = "upload-index",
+    about = "Upload index from git to S3 (http-based index)"
+)]
+pub struct Opts {
+    /// Incremental commit. Any changed files made after this commit will be uploaded.
+    incremental_commit: Option<String>,
+}
+
+pub async fn run(opts: Opts) -> anyhow::Result<()> {
+    let storage = Storage::from_environment();
+
+    println!("fetching git repo");
+    let config = RepositoryConfig::from_environment()?;
+    let (repo, files) = spawn_blocking(move || {
+        let repo = Repository::open(&config)?;
+        repo.reset_head()?;
+        println!("HEAD is at {}", repo.head_oid()?);
+
+        let files = repo.get_files_modified_since(opts.incremental_commit.as_deref())?;
+        println!("found {} files to upload", files.len());
+
+        Ok::<_, anyhow::Error>((repo, files))
+    })
+    .await??;
+
+    if !dialoguer::confirm("continue with upload?").await? {
+        return Ok(());
+    }
+
+    let pb = ProgressBar::new(files.len() as u64);
+    pb.set_style(ProgressStyle::with_template(
+        "{bar:60} ({pos}/{len}, ETA {eta})",
+    )?);
+
+    for file in files.iter().progress_with(pb.clone()) {
+        let file_name = file.file_name().ok_or_else(|| {
+            let file = file.display();
+            anyhow!("Failed to get file name from path: {file}")
+        })?;
+
+        let crate_name = file_name.to_str().ok_or_else(|| {
+            let file_name = file_name.to_string_lossy();
+            anyhow!("Failed to convert file name to utf8: {file_name}",)
+        })?;
+
+        let Some(bytes) = repo.read_entry(crate_name)? else {
+            pb.suspend(|| println!("skipping file `{crate_name}`"));
+            continue;
+        };
+
+        let contents = String::from_utf8(bytes)
+            .with_context(|| format!("Failed to decode `{crate_name}` as UTF-8"))?;
+
+        storage.sync_index(crate_name, Some(contents)).await?;
+    }
+
+    println!(
+        "uploading completed; use `upload-index {}` for an incremental run",
+        repo.head_oid()?
+    );
+    Ok(())
+}

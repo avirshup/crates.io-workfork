@@ -12,10 +12,10 @@ use crates_io::models::token::{CrateScope, EndpointScope};
 use crates_io::models::{NewEmail, User};
 use crates_io::rate_limiter::{LimitedAction, RateLimiterConfig};
 use crates_io::storage::StorageConfig;
-use crates_io::util::gh_token_encryption::GitHubTokenEncryption;
 use crates_io::worker::{Environment, RunnerExt};
 use crates_io::{App, Emails, Env};
 use crates_io_docs_rs::MockDocsRsClient;
+use crates_io_encryption::TokenEncryption;
 use crates_io_github::{GitHubClient, MockGitHubClient};
 use crates_io_github_app::MockGitHubApp;
 use crates_io_index::testing::UpstreamIndex;
@@ -23,15 +23,15 @@ use crates_io_index::{Credentials, RepositoryConfig};
 use crates_io_og_image::OgImageGenerator;
 use crates_io_team_repo::MockTeamRepo;
 use crates_io_test_db::TestDatabase;
+use crates_io_test_utils::builders::OauthGithubBuilder;
 use crates_io_trustpub::github::test_helpers::AUDIENCE;
 use crates_io_trustpub::keystore::{MockOidcKeyStore, OidcKeyStore};
 use crates_io_worker::Runner;
 use diesel_async::AsyncPgConnection;
 use futures_util::TryStreamExt;
 use oauth2::{ClientId, ClientSecret};
-use regex::Regex;
+use regex::regex;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::{rc::Rc, sync::Arc, time::Duration};
 use tokio::runtime::Handle;
 use tokio::task::block_in_place;
@@ -60,23 +60,29 @@ impl Drop for TestAppInner {
             return;
         }
 
-        // Lazily run any remaining jobs
-        if let Some(runner) = &self.runner {
-            block_in_place(move || {
-                Handle::current().block_on(async {
-                    let handle = runner.start();
-                    handle.wait_for_shutdown().await;
-                })
-            });
-        }
-
-        // Manually verify that all jobs have completed successfully
-        // This will catch any tests that enqueued a job but forgot to initialize the runner
         let mut conn = self.test_database.connect();
-        let job_count: i64 = background_jobs::table
+        let mut job_count: i64 = background_jobs::table
             .count()
             .get_result(&mut conn)
             .unwrap();
+
+        if job_count > 0 {
+            // Run any remaining jobs that a test enqueued but never ran.
+            if let Some(runner) = &self.runner {
+                block_in_place(move || {
+                    Handle::current().block_on(async {
+                        let handle = runner.start();
+                        handle.wait_for_shutdown().await;
+                    })
+                });
+            }
+
+            job_count = background_jobs::table
+                .count()
+                .get_result(&mut conn)
+                .unwrap();
+        }
+
         assert_eq!(
             0, job_count,
             "Unprocessed or failed jobs remain in the queue"
@@ -130,9 +136,9 @@ impl TestApp {
         }
     }
 
-    /// Initializes a full application, with an index and background worker
+    /// Initializes a full application with a background worker.
     pub fn full() -> TestAppBuilder {
-        Self::init().with_git_index().with_job_runner()
+        Self::init().with_job_runner()
     }
 
     /// Obtain an async database connection from the primary database pool.
@@ -151,6 +157,9 @@ impl TestApp {
 
         let new_user = crate::new_user(username);
         let id = new_user.insert(&conn).await.unwrap();
+        let user = User::find(&conn, id).await.unwrap();
+
+        OauthGithubBuilder::for_user(&user).insert(&conn).await;
 
         let new_email = NewEmail::builder()
             .user_id(id)
@@ -159,21 +168,6 @@ impl TestApp {
             .build();
 
         new_email.insert(&conn).await.unwrap();
-
-        let user = User {
-            id,
-            name: new_user.name.map(str::to_string),
-            gh_id: new_user.gh_id,
-            gh_login: new_user.gh_login.to_string(),
-            gh_avatar: None,
-            gh_encrypted_token: new_user.gh_encrypted_token.to_vec(),
-            account_lock_reason: None,
-            account_lock_until: None,
-            is_admin: false,
-            publish_notifications: true,
-            username: new_user.gh_login.to_string(),
-            created_at: None,
-        };
 
         MockCookieUser {
             app: self.clone(),
@@ -210,21 +204,13 @@ impl TestApp {
     }
 
     pub async fn emails_snapshot(&self) -> String {
-        static EMAIL_HEADER_REGEX: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(Message-ID|Date): [^\r\n]+\r\n").unwrap());
-
-        static DATE_TIME_REGEX: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z").unwrap());
-
-        static EMAIL_CONFIRM_REGEX: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"/confirm/\w+").unwrap());
-
-        static INVITE_TOKEN_REGEX: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"/accept-invite/\w+").unwrap());
+        let email_header_re = regex!(r"(Message-ID|Date): [^\r\n]+\r\n");
+        let date_time_re = regex!(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z");
+        let email_confirm_re = regex!(r"/confirm/\w+");
+        let invite_token_re = regex!(r"/accept-invite/\w+");
 
         // MIME boundary strings are randomly generated alphanumeric strings
-        static MIME_BOUNDARY_REGEX: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"[A-Za-z0-9]{32,}").unwrap());
+        let mime_boundary_re = regex!(r"[A-Za-z0-9]{32,}");
 
         static SEPARATOR: &str = "\n----------------------------------------\n\n";
 
@@ -237,11 +223,11 @@ impl TestApp {
                 let decoded_email = decode(&email, ParseMode::Robust).unwrap();
                 let email = String::from_utf8_lossy(&decoded_email);
 
-                let email = EMAIL_HEADER_REGEX.replace_all(&email, "");
-                let email = DATE_TIME_REGEX.replace_all(&email, "[0000-00-00T00:00:00Z]");
-                let email = EMAIL_CONFIRM_REGEX.replace_all(&email, "/confirm/[confirm-token]");
-                let email = INVITE_TOKEN_REGEX.replace_all(&email, "/accept-invite/[invite-token]");
-                let email = MIME_BOUNDARY_REGEX.replace_all(&email, "[boundary]");
+                let email = email_header_re.replace_all(&email, "");
+                let email = date_time_re.replace_all(&email, "[0000-00-00T00:00:00Z]");
+                let email = email_confirm_re.replace_all(&email, "/confirm/[confirm-token]");
+                let email = invite_token_re.replace_all(&email, "/accept-invite/[invite-token]");
+                let email = mime_boundary_re.replace_all(&email, "[boundary]");
                 email.to_string()
             })
             .collect::<Vec<_>>()
@@ -362,7 +348,7 @@ impl TestAppBuilder {
                 .index_location
                 .clone()
                 .or_else(|| self.index.as_ref().map(|i| i.url()))
-                .expect("Index or `index_location` must be configured to build a job runner");
+                .unwrap_or_else(|| Url::parse("file:///nonexistent").unwrap());
 
             let repository_config = RepositoryConfig {
                 index_location,
@@ -452,6 +438,7 @@ impl TestAppBuilder {
 
     pub fn with_git_index(mut self) -> Self {
         self.index = Some(UpstreamIndex::new().unwrap());
+        self.config.sync_git_index = true;
         self
     }
 
@@ -564,6 +551,7 @@ fn simple_config() -> config::Server {
 
     let mut storage = StorageConfig::in_memory();
     storage.cdn_prefix = Some("static.crates.io".to_string());
+    storage.cache_tags_enabled = true;
 
     config::Server {
         base,
@@ -581,7 +569,7 @@ fn simple_config() -> config::Server {
             client_id: ClientId::new(dotenvy::var("GH_CLIENT_ID").unwrap_or_default()),
             client_secret: ClientSecret::new(dotenvy::var("GH_CLIENT_SECRET").unwrap_or_default()),
         },
-        gh_token_encryption: GitHubTokenEncryption::for_testing(),
+        token_encryption: TokenEncryption::for_testing(),
         publish_limits: PublishLimitsConfig::for_testing(),
         rate_limits: RateLimitsConfig {
             new_versions_daily: Some(10),
@@ -614,7 +602,11 @@ fn simple_config() -> config::Server {
         features: FeaturesConfig {
             index_include_pubtime: false,
             zip_archives_enabled: true,
+            cache_tags_enabled: true,
+            cache_tag_invalidations_enabled: true,
         },
+        fastly: None,
+        sync_git_index: false,
         index_archive_url: None,
         postgres_bin_dir: None,
     }

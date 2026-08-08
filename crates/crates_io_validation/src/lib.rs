@@ -86,6 +86,30 @@ pub enum InvalidDependencyName {
     Char(char, String),
 }
 
+pub const MAX_USERNAME_LENGTH: usize = 39;
+
+// Only allows usernames to contain alphanumeric characters ([a-zA-Z0-9]), hyphens (-), and underscores (_).
+// Doesn't allow usernames to start with a hyphen or underscore.
+// Doesn't allow usernames to exceed 39 characters.
+
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum InvalidUsername {
+    #[error("the username `{0}` is too long (max {MAX_USERNAME_LENGTH} characters)")]
+    TooLong(String),
+    #[error("username cannot be empty")]
+    Empty,
+    #[error(
+        "invalid character `{0}` in username: `{1}`, \
+        the first character must be an ASCII alphanumeric character"
+    )]
+    Start(char, String),
+    #[error(
+        "invalid character `{0}` in username: `{1}`, \
+        characters must be ASCII alphanumeric characters, `-`, or `_`"
+    )]
+    Char(char, String),
+}
+
 // Validates the name is a valid crate name.
 // This is also used for validating the name of dependencies.
 // So the `for_what` parameter is used to indicate what the name is used for.
@@ -102,7 +126,7 @@ pub fn validate_crate_name(for_what: &str, name: &str) -> Result<(), InvalidCrat
 
 // Checks that the name is a valid crate name.
 // 1. The name must be non-empty.
-// 2. The first character must be an ASCII character.
+// 2. The first character must be an ASCII alphabetic character.
 // 3. The remaining characters must be ASCII alphanumerics or `-` or `_`.
 // Note: This differs from `valid_dependency_name`, which allows `_` as the first character.
 fn validate_create_ident(for_what: &str, name: &str) -> Result<(), InvalidCrateName> {
@@ -150,7 +174,7 @@ pub fn validate_dependency_name(name: &str) -> Result<(), InvalidDependencyName>
 
 // Checks that the name is a valid dependency name.
 // 1. The name must be non-empty.
-// 2. The first character must be an ASCII character or `_`.
+// 2. The first character must be an ASCII alphabetic character or `_`.
 // 3. The remaining characters must be ASCII alphanumerics or `-` or `_`.
 fn validate_dependency_ident(name: &str) -> Result<(), InvalidDependencyName> {
     if name.is_empty() {
@@ -165,7 +189,6 @@ fn validate_dependency_ident(name: &str) -> Result<(), InvalidDependencyName> {
             return Err(InvalidDependencyName::Start(ch, name.into()));
         }
     }
-
     for ch in chars {
         if !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
             return Err(InvalidDependencyName::Char(ch, name.into()));
@@ -178,7 +201,7 @@ fn validate_dependency_ident(name: &str) -> Result<(), InvalidDependencyName> {
 /// Validates the THIS parts of `features = ["THIS", "and/THIS", "dep:THIS", "dep?/THIS"]`.
 /// 1. The name must be non-empty.
 /// 2. The first character must be a Unicode XID start character, `_`, or a digit.
-/// 3. The remaining characters must be Unicode XID characters, `_`, `+`, `-`, or `.`.
+/// 3. The remaining characters must be Unicode XID continue characters (including `_`), `+`, `-`, or `.`.
 pub fn validate_feature_name(name: &str) -> Result<(), InvalidFeature> {
     if name.is_empty() {
         return Err(InvalidFeature::Empty);
@@ -210,6 +233,28 @@ pub fn validate_feature(name: &str) -> Result<(), InvalidFeature> {
     } else {
         validate_feature_name(name)
     }
+}
+
+pub fn validate_username(username: &str) -> Result<(), InvalidUsername> {
+    if username.chars().count() > MAX_USERNAME_LENGTH {
+        return Err(InvalidUsername::TooLong(username.into()));
+    }
+
+    let mut chars = username.chars();
+    let Some(first_char) = chars.next() else {
+        return Err(InvalidUsername::Empty);
+    };
+    if !first_char.is_ascii_alphanumeric() {
+        return Err(InvalidUsername::Start(first_char, username.into()));
+    }
+
+    for ch in chars {
+        if !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
+            return Err(InvalidUsername::Char(ch, username.into()));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,6 +410,43 @@ mod tests {
         assert_err_eq!(
             validate_feature("0foo?/bar.web"),
             InvalidDependencyName::StartWithDigit("0foo".into()).into()
+        );
+    }
+
+    #[test]
+    fn test_validate_username() {
+        use super::{InvalidUsername, MAX_USERNAME_LENGTH};
+
+        assert_ok!(validate_username("foo"));
+        assert_err_eq!(
+            validate_username("京"),
+            InvalidUsername::Start('京', "京".into())
+        );
+        assert_err_eq!(validate_username(""), InvalidUsername::Empty);
+        assert_err_eq!(
+            validate_username("💝"),
+            InvalidUsername::Start('💝', "💝".into())
+        );
+
+        assert_ok!(validate_username("foo_underscore"));
+        assert_ok!(validate_username("foo-dash"));
+        assert_err_eq!(
+            validate_username("foo+plus"),
+            InvalidUsername::Char('+', "foo+plus".into())
+        );
+        assert_err_eq!(
+            validate_username("_foo"),
+            InvalidUsername::Start('_', "_foo".into())
+        );
+        assert_err_eq!(
+            validate_username("-foo"),
+            InvalidUsername::Start('-', "-foo".into())
+        );
+        assert_ok!(validate_username("123"));
+
+        assert_err_eq!(
+            validate_username("o".repeat(MAX_USERNAME_LENGTH + 1).as_str()),
+            InvalidUsername::TooLong("o".repeat(MAX_USERNAME_LENGTH + 1).as_str().into())
         );
     }
 }

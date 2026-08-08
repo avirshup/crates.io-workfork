@@ -10,8 +10,8 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-ammonia = "=4.1.2"
-comrak = { version = "=0.52.0", default-features = false, features = ["bon"] }
+ammonia = "=4.1.4"
+comrak = { version = "=0.54.0", default-features = false, features = ["bon"] }
 htmlescape = "=0.3.1"
 url = "=2.5.8"
 

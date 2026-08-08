@@ -1,18 +1,19 @@
 use crate::app::AppState;
-use crate::models::{CrateOwner, OwnerKind, User};
+use crate::models::{CrateOwner, OwnerKind, PublicUser};
 use crate::schema::{crate_downloads, crate_owners, crates};
 use crate::util::errors::AppResult;
 use crate::views::EncodablePublicUser;
 use axum::Json;
 use axum::extract::Path;
 use bigdecimal::{BigDecimal, ToPrimitive};
-use crates_io_database::fns::lower;
+use crates_io_database::fns::canon_username;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use serde::Serialize;
 
+/// Response returned when getting a user by login.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct GetResponse {
+pub struct UserGetResponse {
     pub user: EncodablePublicUser,
 }
 
@@ -21,27 +22,31 @@ pub struct GetResponse {
     get,
     path = "/api/v1/users/{user}",
     params(
-        ("user" = String, Path, description = "Login name of the user"),
+        ("user" = String, Path, description = "crates.io username"),
     ),
     tag = "users",
-    responses((status = 200, description = "Successful Response", body = inline(GetResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(UserGetResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn find_user(
     state: AppState,
     Path(user_name): Path<String>,
-) -> AppResult<Json<GetResponse>> {
+) -> AppResult<Json<UserGetResponse>> {
     let mut conn = state.db_read_prefer_primary().await?;
 
-    use crate::schema::users::dsl::{gh_login, id};
+    use crate::schema::users::dsl::{id, username};
 
-    let name = lower(&user_name);
-    let user: User = User::query()
-        .filter(lower(gh_login).eq(name))
+    let name = canon_username(&user_name);
+    let user: PublicUser = PublicUser::query()
+        .filter(canon_username(username).eq(name))
         .order(id.desc())
         .first(&mut conn)
         .await?;
 
-    Ok(Json(GetResponse { user: user.into() }))
+    Ok(Json(UserGetResponse { user: user.into() }))
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -62,7 +67,11 @@ pub struct StatsResponse {
         ("id" = i32, Path, description = "ID of the user"),
     ),
     tag = "users",
-    responses((status = 200, description = "Successful Response", body = inline(StatsResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(StatsResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn get_user_stats(
     state: AppState,

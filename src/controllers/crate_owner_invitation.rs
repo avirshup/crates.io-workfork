@@ -4,7 +4,7 @@ use crate::auth::Authentication;
 use crate::controllers::helpers::authorization::Rights;
 use crate::controllers::helpers::pagination::{Page, PaginationOptions, PaginationQueryParams};
 use crate::models::crate_owner_invitation::AcceptError;
-use crate::models::{Crate, CrateOwnerInvitation, User};
+use crate::models::{Crate, CrateOwnerInvitation, PublicUser};
 use crate::schema::{crate_owner_invitations, crates, users};
 use crate::util::RequestUtils;
 use crate::util::errors::{AppResult, BoxedAppError, bad_request, custom, forbidden, internal};
@@ -44,7 +44,11 @@ pub struct LegacyListResponse {
     security(("cookie" = [])),
     tag = "owners",
     extensions(("x-internal" = json!(true))),
-    responses((status = 200, description = "Successful Response", body = inline(LegacyListResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(LegacyListResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn list_crate_owner_invitations_for_user(
     app: AppState,
@@ -89,10 +93,11 @@ pub async fn list_crate_owner_invitations_for_user(
     ))
 }
 
+/// Query parameters for listing crate owner invitations.
 #[derive(Debug, Deserialize, FromRequestParts, utoipa::IntoParams)]
 #[from_request(via(Query))]
 #[into_params(parameter_in = Query)]
-pub struct ListQueryParams {
+pub struct CrateOwnerInvitationListQueryParams {
     /// Filter crate owner invitations by crate name.
     ///
     /// Only crate owners can query pending invitations for their crate.
@@ -108,15 +113,19 @@ pub struct ListQueryParams {
 #[utoipa::path(
     get,
     path = "/api/private/crate_owner_invitations",
-    params(ListQueryParams, PaginationQueryParams),
+    params(CrateOwnerInvitationListQueryParams, PaginationQueryParams),
     security(("cookie" = [])),
     tag = "owners",
     extensions(("x-internal" = json!(true))),
-    responses((status = 200, description = "Successful Response", body = inline(PrivateListResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(PrivateListResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn list_crate_owner_invitations(
     app: AppState,
-    params: ListQueryParams,
+    params: CrateOwnerInvitationListQueryParams,
     req: Parts,
 ) -> AppResult<(TypedHeader<CacheControl>, Json<PrivateListResponse>)> {
     let mut conn = app.db_read().await?;
@@ -132,10 +141,10 @@ enum ListFilter {
     InviteeId(i32),
 }
 
-impl TryFrom<ListQueryParams> for ListFilter {
+impl TryFrom<CrateOwnerInvitationListQueryParams> for ListFilter {
     type Error = BoxedAppError;
 
-    fn try_from(params: ListQueryParams) -> Result<Self, Self::Error> {
+    fn try_from(params: CrateOwnerInvitationListQueryParams) -> Result<Self, Self::Error> {
         let filter = if let Some(crate_name) = params.crate_name {
             ListFilter::CrateName(crate_name.clone())
         } else if let Some(id) = params.invitee_id {
@@ -165,8 +174,6 @@ async fn prepare_list(
     let config = &state.config;
 
     let mut crate_names = HashMap::new();
-    let mut users = IndexMap::new();
-    users.insert(user.id, user.clone());
 
     let sql_filter: Box<dyn BoxableExpression<crate_owner_invitations::table, Pg, SqlType = Bool>> =
         match filter {
@@ -174,7 +181,7 @@ async fn prepare_list(
                 // Only allow crate owners to query pending invitations for their crate.
                 let krate: Crate = Crate::by_name(&crate_name).first(&mut conn).await?;
                 let owners = krate.owners(conn).await?;
-                let encryption = &state.config.gh_token_encryption;
+                let encryption = &state.config.token_encryption;
                 if Rights::get(user, &*state.github, &owners, encryption).await? != Rights::Full {
                     let detail = "only crate owners can query pending invitations for their crate";
                     return Err(forbidden(detail));
@@ -270,10 +277,11 @@ async fn prepare_list(
             std::iter::once(invite.invited_user_id)
                 .chain(std::iter::once(invite.invited_by_user_id))
         })
-        .filter(|id| !users.contains_key(id))
         .collect::<Vec<_>>();
+
+    let mut users = IndexMap::new();
     if !missing_users.is_empty() {
-        let new_users: Vec<User> = User::query()
+        let new_users: Vec<PublicUser> = PublicUser::query()
             .filter(users::id.eq_any(missing_users))
             .load(&mut conn)
             .await?;
@@ -357,7 +365,11 @@ pub struct HandleResponse {
         ("cookie" = []),
     ),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(HandleResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(HandleResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn handle_crate_owner_invitation(
     state: AppState,
@@ -393,7 +405,11 @@ pub async fn handle_crate_owner_invitation(
         ("token" = String, Path, description = "Secret token sent to the user's email address"),
     ),
     tag = "owners",
-    responses((status = 200, description = "Successful Response", body = inline(HandleResponse))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(HandleResponse)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn accept_crate_owner_invitation_with_token(
     state: AppState,

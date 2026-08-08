@@ -1,8 +1,9 @@
 use crate::util::{RequestHelper, TestApp};
-use claims::assert_ok;
-use crates_io::models::NewUser;
+use crates_io::models::{NewUser, User};
 use crates_io::schema::users;
 use crates_io::views::EncodablePublicUser;
+use crates_io_test_utils::builders::{OauthGithubBuilder, UserBuilder};
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use insta::assert_snapshot;
 use serde::Deserialize;
@@ -15,15 +16,26 @@ pub struct UserShowPublicResponse {
 #[tokio::test(flavor = "multi_thread")]
 async fn show() {
     let (app, anon, _) = TestApp::init().with_user().await;
-    app.db_new_user("Bar").await;
+    let mut conn = app.db_conn().await;
+
+    let bar = app.db_new_user("github-Bar").await;
+    diesel::update(users::table.find(bar.as_model().id))
+        .set(users::username.eq("crates-Bar"))
+        .execute(&mut conn)
+        .await
+        .unwrap();
 
     let json: UserShowPublicResponse = anon.get("/api/v1/users/foo").await.good();
     assert_eq!(json.user.login, "foo");
 
     // Lookup by username is case insensitive; returned data uses capitalization in database
-    let json: UserShowPublicResponse = anon.get("/api/v1/users/bAr").await.good();
-    assert_eq!(json.user.login, "Bar");
-    assert_eq!(json.user.url, "https://github.com/Bar");
+    let json: UserShowPublicResponse = anon.get("/api/v1/users/crates_bar").await.good();
+    assert_eq!(json.user.login, "crates-Bar");
+    assert_eq!(json.user.url, "https://github.com/github-Bar");
+
+    // GitHub logins are not used to resolve crates.io users
+    let response = anon.get::<()>("/api/v1/users/github-Bar").await;
+    assert_snapshot!(response.status(), @"404 Not Found");
 
     // Username not in database results in 404
     let response = anon.get::<()>("/api/v1/users/not_a_user").await;
@@ -33,7 +45,7 @@ async fn show() {
 #[tokio::test(flavor = "multi_thread")]
 async fn show_latest_user_case_insensitively() {
     let (app, anon) = TestApp::init().empty().await;
-    let mut conn = app.db_conn().await;
+    let conn = app.db_conn().await;
 
     // Please do not delete or modify the setup of this test in order to get it to pass.
     // This setup mimics how GitHub works. If someone abandons a GitHub account, the username is
@@ -43,28 +55,21 @@ async fn show_latest_user_case_insensitively() {
     // crates.io/user/{username} pages, the best we can do is show the last crates.io account
     // created with that username.
 
-    let user1 = NewUser::builder()
-        .gh_id(1)
-        .gh_login("foobar")
-        .username("foobar")
-        .name("I was first then deleted my github account")
-        .gh_encrypted_token(&[])
-        .build();
+    let user1 = UserBuilder::new()
+        .with_username("foobar")
+        .with_display_name("I was first then deleted my github account")
+        .new_user();
+    let user1_id = user1.insert(&conn).await.unwrap();
+    let user1 = User::find(&conn, user1_id).await.unwrap();
+    OauthGithubBuilder::for_user(&user1).insert(&conn).await;
 
-    let user2 = NewUser::builder()
-        .gh_id(2)
-        .gh_login("FOOBAR")
-        .username("FOOBAR")
-        .name("I was second, I took the foobar username on github")
-        .gh_encrypted_token(&[])
-        .build();
-
-    assert_ok!(
-        diesel::insert_into(users::table)
-            .values(&vec![user1, user2])
-            .execute(&mut conn)
-            .await
-    );
+    let user2 = UserBuilder::new()
+        .with_username("FOOBAR")
+        .with_display_name("I was second, I took the foobar username on github")
+        .new_user();
+    let user2_id = user2.insert(&conn).await.unwrap();
+    let user2 = User::find(&conn, user2_id).await.unwrap();
+    OauthGithubBuilder::for_user(&user2).insert(&conn).await;
 
     let json: UserShowPublicResponse = anon.get("/api/v1/users/fOObAr").await.good();
     assert_eq!(
@@ -85,7 +90,6 @@ async fn user_without_github_account() {
         .gh_login("foobar")
         .username("foobar")
         .name("I deleted my github account")
-        .gh_encrypted_token(&[])
         .build();
     new_user.insert(&conn).await.unwrap();
     // This user doesn't have a linked record in `oauth_github`

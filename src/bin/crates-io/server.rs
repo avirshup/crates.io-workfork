@@ -1,0 +1,138 @@
+use crates_io::middleware::normalize_path::normalize_path;
+use crates_io::{App, Emails, metrics::LogEncoder};
+use std::{sync::Arc, time::Duration};
+
+use axum::ServiceExt;
+use crates_io_env_vars::list;
+use crates_io_github::RealGitHubClient;
+use prometheus::Encoder;
+use reqwest::Client;
+use std::io::Write;
+use std::net::SocketAddr;
+use tokio::net::TcpListener;
+use tokio::signal::unix::{SignalKind, signal};
+use tower::Layer;
+
+const CORE_THREADS: usize = 4;
+
+pub fn run() -> anyhow::Result<()> {
+    let _sentry = crates_io::sentry::init();
+
+    // Initialize logging
+    crates_io::util::tracing::init();
+
+    let _span = info_span!("server.run");
+
+    let config = crates_io::config::Server::from_environment()?;
+
+    let emails = Emails::from_environment(&config);
+
+    let user_agent = crates_io_version::user_agent();
+    let client = Client::builder().user_agent(user_agent).build()?;
+
+    let github = RealGitHubClient::new(client);
+    let github = Arc::new(github);
+
+    let app = App::builder()
+        .databases_from_config(&config.db)
+        .github(github)
+        .github_oauth_from_config(&config)
+        .trustpub_providers(&list("TRUSTPUB_PROVIDERS")?)
+        .emails(emails)
+        .storage_from_config(&config.storage)
+        .rate_limiter_from_config(config.rate_limits.actions.clone())
+        .config(Arc::new(config))
+        .build();
+
+    let app = Arc::new(app);
+
+    // Start the background thread periodically logging instance metrics.
+    log_instance_metrics_thread(app.clone());
+
+    let axum_router = crates_io::build_handler(app.clone());
+
+    // Apply the `normalize_path` middleware around the axum router.
+    //
+    // See https://docs.rs/axum/0.7.2/axum/middleware/index.html#rewriting-request-uri-in-middleware.
+    let normalize_path = axum::middleware::from_fn(normalize_path);
+    let axum_router = normalize_path.layer(axum_router);
+
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    builder.worker_threads(CORE_THREADS);
+    if let Some(threads) = app.config.max_blocking_threads {
+        builder.max_blocking_threads(threads);
+    }
+
+    let rt = builder.build()?;
+
+    let make_service = axum_router.into_make_service_with_connect_info::<SocketAddr>();
+
+    // Block the main thread until the server has shutdown
+    rt.block_on(async {
+        // Create a `TcpListener` using tokio.
+        let listener = TcpListener::bind((app.config.bind.ip, app.config.bind.port)).await?;
+
+        let addr = listener.local_addr()?;
+
+        // Do not change this line! Removing the line or changing its contents in any way will break
+        // the test suite :)
+        info!("Listening at http://{addr}");
+
+        // Run the server with graceful shutdown
+        axum::serve(listener, make_service)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+    })?;
+
+    info!("Server has gracefully shutdown!");
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let interrupt = async {
+        signal(SignalKind::interrupt())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    let terminate = async {
+        signal(SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = interrupt => {},
+        _ = terminate => {},
+    }
+}
+
+fn log_instance_metrics_thread(app: Arc<App>) {
+    // Only run the thread if the configuration is provided
+    let interval = match app.config.metrics.instance_log_every_seconds {
+        Some(secs) => Duration::from_secs(secs),
+        None => return,
+    };
+
+    std::thread::spawn(move || {
+        loop {
+            if let Err(err) = log_instance_metrics_inner(&app) {
+                error!("log_instance_metrics error: {err}");
+            }
+            std::thread::sleep(interval);
+        }
+    });
+}
+
+fn log_instance_metrics_inner(app: &App) -> anyhow::Result<()> {
+    let families = app.instance_metrics.gather(app)?;
+
+    let mut stdout = std::io::stdout();
+    LogEncoder::new().encode(&families, &mut stdout)?;
+    stdout.flush()?;
+
+    Ok(())
+}

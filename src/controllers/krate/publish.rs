@@ -10,7 +10,7 @@ use axum::Json;
 use axum::body::{Body, Bytes};
 use chrono::{DateTime, SecondsFormat, Utc};
 use crates_io_cargo_toml::{Dependency, DepsSet, TargetDepsSet};
-use crates_io_tarball::{TarballError, process_tarball};
+use crates_io_tarball::{TarballError, TarballLimits, process_tarball};
 use crates_io_validation::{
     MAX_VERSION_LENGTH, validate_crate_name, validate_dependency_name, validate_feature,
     validate_feature_name,
@@ -96,7 +96,11 @@ impl AuthType {
         ("cookie" = []),
     ),
     tag = "publish",
-    responses((status = 200, description = "Successful Response", body = inline(GoodCrate))),
+    responses(
+        (status = 200, description = "Successful Response", body = inline(GoodCrate)),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn publish(app: AppState, req: Parts, body: Body) -> AppResult<Json<GoodCrate>> {
     let stream = body.into_data_stream();
@@ -260,12 +264,16 @@ pub async fn publish(app: AppState, req: Parts, body: Body) -> AppResult<Json<Go
     let tarball_bytes = read_tarball_bytes(&mut reader, max_upload_size).await?;
     let content_length = tarball_bytes.len() as u64;
 
-    let pkg_name = format!("{}-{}", &*metadata.name, &version_string);
+    let pkg_name = format!("{}-{version_string}", &*metadata.name);
     let max_unpack_size = std::cmp::max(
         app.config.publish_limits.unpack_size,
         max_upload_size as u64,
     );
-    let tarball_info = process_tarball(&pkg_name, &*tarball_bytes, max_unpack_size).await?;
+    let limits = TarballLimits {
+        unpack_size: max_unpack_size,
+        entries: app.config.publish_limits.tarball_entries,
+    };
+    let tarball_info = process_tarball(&pkg_name, &*tarball_bytes, limits).await?;
 
     // `unwrap()` is safe here since `process_tarball()` validates that
     // we only accept manifests with a `package` section and without
@@ -474,7 +482,7 @@ pub async fn publish(app: AppState, req: Parts, body: Body) -> AppResult<Json<Go
             };
 
             let owners = krate.owners(conn).await?;
-            if Rights::get(user, &*app.github, &owners, &app.config.gh_token_encryption).await? < Rights::Publish {
+            if Rights::get(user, &*app.github, &owners, &app.config.token_encryption).await? < Rights::Publish {
                 return Err(custom(StatusCode::FORBIDDEN, MISSING_RIGHTS_ERROR_MESSAGE));
             }
 
@@ -649,7 +657,14 @@ pub async fn publish(app: AppState, req: Parts, body: Body) -> AppResult<Json<Go
             .await
             .map_err(|e| internal(format!("failed to upload crate: {e}")))?;
 
-        let git_index_job = jobs::SyncToGitIndex::new(&krate.name);
+        let sync_git_index = async {
+            if app.config.sync_git_index {
+                let git_index_job = jobs::SyncToGitIndex::new(&krate.name);
+                git_index_job.enqueue(&*conn).await?;
+            }
+            Ok(())
+        };
+
         let sparse_index_job = jobs::SyncToSparseIndex::new(&krate.name);
         let publish_notifications_job = SendPublishNotificationsJob::new(version.id);
         let crate_feed_job = jobs::rss::SyncCrateFeed::new(krate.name.clone());
@@ -665,7 +680,7 @@ pub async fn publish(app: AppState, req: Parts, body: Body) -> AppResult<Json<Go
         };
 
         tokio::try_join!(
-            git_index_job.enqueue(&*conn),
+            sync_git_index,
             sparse_index_job.enqueue(&*conn),
             publish_notifications_job.enqueue(&*conn),
             build_crate_zip,
@@ -1049,13 +1064,11 @@ impl From<TarballError> for BoxedAppError {
             TarballError::MalformedPaxSize | TarballError::SizeMismatch => {
                 bad_request("uploaded tarball is malformed")
             }
+            TarballError::TooManyEntries { max } => {
+                bad_request(format!("uploaded tarball contains more than {max} entries"))
+            }
             TarballError::InvalidPath(path) => bad_request(format!("invalid path found: {path}")),
-            TarballError::UnexpectedSymlink(path) => {
-                bad_request(format!("unexpected symlink or hard link found: {path}"))
-            }
-            TarballError::UnexpectedDevice(path) => {
-                bad_request(format!("unexpected device file found: {path}"))
-            }
+            error @ TarballError::UnexpectedEntry { .. } => bad_request(error.to_string()),
             TarballError::IO(err) => err.into(),
             TarballError::MissingManifest => {
                 bad_request("uploaded tarball is missing a `Cargo.toml` manifest file")

@@ -53,7 +53,11 @@ impl DeleteQueryParams {
     security(("cookie" = [])),
     tag = "crates",
     extensions(("x-internal" = json!(true))),
-    responses((status = 204, description = "Successful Response")),
+    responses(
+        (status = 204, description = "Successful Response"),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn delete_crate(
     path: CratePath,
@@ -72,7 +76,7 @@ pub async fn delete_crate(
     // Check that the user is an owner of the crate (team owners are not allowed to delete crates)
     let user = auth.user();
     let owners = krate.owners(&conn).await?;
-    match Rights::get(user, &*app.github, &owners, &app.config.gh_token_encryption).await? {
+    match Rights::get(user, &*app.github, &owners, &app.config.token_encryption).await? {
         Rights::Full => {}
         Rights::Publish => {
             let msg = "team members don't have permission to delete crates";
@@ -134,12 +138,19 @@ pub async fn delete_crate(
             .execute(conn)
             .await?;
 
-        let git_index_job = jobs::SyncToGitIndex::new(&krate.name);
+        let sync_git_index = async {
+            if app.config.sync_git_index {
+                let git_index_job = jobs::SyncToGitIndex::new(&krate.name);
+                git_index_job.enqueue(&*conn).await?;
+            }
+            Ok(())
+        };
+
         let sparse_index_job = jobs::SyncToSparseIndex::new(&krate.name);
         let delete_from_storage_job = jobs::DeleteCrateFromStorage::new(path.name);
 
         tokio::try_join!(
-            git_index_job.enqueue(&*conn),
+            sync_git_index,
             sparse_index_job.enqueue(&*conn),
             delete_from_storage_job.enqueue(&*conn),
         )?;

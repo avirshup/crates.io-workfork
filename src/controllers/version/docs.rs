@@ -21,7 +21,11 @@ use tracing::error;
     ),
     tag = "versions",
     extensions(("x-internal" = json!(true))),
-    responses((status = 201, description = "Successful Response")),
+    responses(
+        (status = 201, description = "Successful Response"),
+        (status = "4XX", description = "Client Error", body = crate::util::errors::ApiErrorResponse<'_>),
+        (status = "5XX", description = "Server Error", body = crate::util::errors::ApiErrorResponse<'_>),
+    ),
 )]
 pub async fn rebuild_version_docs(
     app: AppState,
@@ -37,7 +41,7 @@ pub async fn rebuild_version_docs(
     // Check that the user is an owner of the crate, or a team member (= publish rights)
     let user = auth.user();
     let owners = krate.owners(&conn).await?;
-    let encryption = &app.config.gh_token_encryption;
+    let encryption = &app.config.token_encryption;
     if Rights::get(user, &*app.github, &owners, encryption).await? < Rights::Publish {
         return Err(custom(
             StatusCode::FORBIDDEN,
